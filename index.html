@@ -137,7 +137,7 @@ let S = {
   blutOn: false, elixierOn: false,
   roll: null, blessing: null, rolling: false, blessingRolling: false,
 };
-let obrReady = false;
+let obrState = (typeof OBR === "undefined") ? "nosdk" : "connecting"; // nosdk | connecting | ready | timeout
 let sceneIds = [];
 
 function randomRoll() {
@@ -267,7 +267,9 @@ function headerHtml() {
   ];
   let h = "<h1>HeXXen 1733 · Würfelbot</h1>";
   h += '<div class="sub">Fertigkeitsproben mit HeXXen-, Janus- und Spezialwürfeln. Für PC und Smartphone.</div>';
-  if (obrReady) h += '<div class="obrbadge"><i></i>Mit Owlbear Rodeo verbunden</div>';
+  if (obrState === "ready") h += '<div class="obrbadge"><i></i>Mit Owlbear Rodeo verbunden</div>';
+  else if (obrState === "timeout") h += '<div class="obrbadge" style="color:#fde68a;background:rgba(120,53,15,.45);border-color:#b45309"><i style="background:#f59e0b"></i>Keine Szene-Verbindung erkannt</div>';
+  else if (obrState === "nosdk") h += '<div class="obrbadge" style="color:#fde68a;background:rgba(120,53,15,.45);border-color:#b45309"><i style="background:#f59e0b"></i>SDK nicht geladen (Adblocker?)</div>';
   h += '<div class="legend">' + legend.map((l) => '<span><span class="swatch" style="background:' + l.c + '"></span>' + l.n + "</span>").join("") + "</div>";
   return h;
 }
@@ -375,7 +377,7 @@ function resultHtml(ev) {
   if (ev.stars > 0) h += '<p class="hint" style="margin-top:.4rem">Espritsterne können stattdessen für Espritkräfte eingesetzt werden, dann entfällt ihr Erfolgsbonus.</p>';
   h += "</section>";
 
-  if (obrReady) {
+  if (obrState === "ready" || obrState === "timeout") {
     h += '<div class="grid2" style="margin-top:1.1rem">'
       + '<button class="btn-sec" data-act="scene">Auf die Szene würfeln</button>'
       + '<button class="btn-sec" data-act="cleanup" ' + (sceneIds.length > 0 ? "" : "disabled") + '>Würfel entfernen</button></div>';
@@ -599,13 +601,22 @@ document.getElementById("app").addEventListener("click", function (e) {
 // ---------- Start ----------
 render();
 (function initOBR() {
-  if (typeof OBR === "undefined") return; // eigenständiger Betrieb ohne Owlbear Rodeo
-  try {
-    OBR.onReady(function () {
-      obrReady = true;
-      render();
-    });
-  } catch (e) { /* SDK nicht verfügbar */ }
+  if (typeof OBR === "undefined") {
+    obrState = "nosdk";
+  } else {
+    try {
+      OBR.onReady(function () {
+        obrState = "ready";
+        render();
+      });
+    } catch (e) {
+      obrState = "timeout";
+    }
+    setTimeout(function () {
+      if (obrState === "connecting") { obrState = "timeout"; render(); }
+    }, 3000);
+  }
+  render();
 })();
 </script>
 </body>
