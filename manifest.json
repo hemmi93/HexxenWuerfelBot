@@ -2,14 +2,14 @@
   "name": "HeXXen 1733 Würfelbot",
   "description": "Fertigkeitsproben mit HeXXen-, Janus-, Segnungs-, Blut- und Elixierwürfeln",
   "manifest_version": 2,
-  "version": "1.0.2",
+  "version": "1.0.3",
   "author": "Marc Schroeder",
-  "icon": "https://hemmi93.github.com/HexxenWuerfelBot/icon.svg",
+  "icon": "https://hemmi93.github.io/HexxenWuerfelBot/icon.svg",
   "homepage_url": "https://owlbear.rodeo",
   "action": {
     "title": "HeXXen 1733 Würfelbot",
-    "icon": "https://hemmi93.github.com/HexxenWuerfelBot/icon.svg",
-    "popover": "https://hemmi93.github.com/HexxenWuerfelBot/index.html",
+    "icon": "https://hemmi93.github.io/HexxenWuerfelBot/icon.svg",
+    "popover": "https://hemmi93.github.io/HexxenWuerfelBot/index.html",
     "height": 720,
     "width": 420
   }
