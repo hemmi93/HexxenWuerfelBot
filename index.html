@@ -138,6 +138,7 @@ let S = {
   roll: null, blessing: null, rolling: false, blessingRolling: false,
 };
 let obrReady = false;
+let sceneIds = [];
 
 function randomRoll() {
   return {
@@ -376,8 +377,9 @@ function resultHtml(ev) {
 
   if (obrReady) {
     h += '<div class="grid2" style="margin-top:1.1rem">'
-      + '<button class="btn-sec" data-act="share">In Szene teilen</button>'
-      + '<button class="btn-sec" data-act="new" ' + (S.rolling ? "disabled" : "") + '>Neue Probe</button></div>';
+      + '<button class="btn-sec" data-act="scene">Auf die Szene würfeln</button>'
+      + '<button class="btn-sec" data-act="cleanup" ' + (sceneIds.length > 0 ? "" : "disabled") + '>Würfel entfernen</button></div>';
+    h += '<button class="btn-sec" style="margin-top:.5rem" data-act="new" ' + (S.rolling ? "disabled" : "") + '>Neue Probe</button>';
   } else {
     h += '<button class="btn-sec" style="margin-top:1.1rem" data-act="new" ' + (S.rolling ? "disabled" : "") + ">Neue Probe</button>";
   }
@@ -455,31 +457,120 @@ function copyResult(text) {
   }
 }
 
-async function shareToScene() {
-  const ev = evaluate();
-  if (!ev) return;
-  const text = shareText(ev);
-  if (typeof OBR === "undefined") { copyResult(text); return; }
-  try {
-    let item;
-    if (typeof buildText === "function") {
-      item = buildText().plainText(text).textType("PLAIN").fontSize(28).fillColor("#f5f0e6").textAlign("CENTER").build();
-    } else {
-      item = rawTextItem(text);
-    }
-    try {
-      const vp = await OBR.viewport.getViewport();
-      const sc = (vp && vp.scale) ? vp.scale : 1;
-      if (vp && vp.topLeft) {
-        item.x = vp.topLeft.x + (vp.width / sc) / 2 - 150;
-        item.y = vp.topLeft.y + (vp.height / sc) / 2 - 60;
-      }
-    } catch (e) { /* Position bleibt 0/0 */ }
-    await OBR.scene.items.addItems([item]);
-    OBR.notification.show("Ergebnis in die Szene geteilt.");
-  } catch (err) {
-    copyResult(text);
+// ---------- Würfel auf die Szene legen ----------
+function diceListForScene() {
+  const roll = S.roll;
+  if (!roll) return [];
+  const files = [];
+  roll.hexxen.forEach(function (v) {
+    const f = roll.mode === "hm" ? HM_FACES[v - 1] : HEXXEN_FACES[v - 1];
+    files.push(f === "star" ? "wuerfel-hexxen-stern.svg" : f === "success" ? "wuerfel-hexxen-erfolg.svg" : "wuerfel-hexxen-blank.svg");
+  });
+  roll.janus.forEach(function (v) {
+    const f = JANUS_FACES[v - 1];
+    files.push(f === "janus" ? "wuerfel-janus-symbol.svg" : "wuerfel-janus-blank.svg");
+  });
+  if (roll.blut !== null) {
+    const dr = BLUT_FACES[roll.blut - 1];
+    files.push(dr === 0 ? "wuerfel-blut-blank.svg" : "wuerfel-blut-" + dr + ".svg");
   }
+  if (roll.elixier !== null) {
+    files.push("wuerfel-elixier-" + ELIXIR_FACES[roll.elixier - 1] + ".svg");
+  }
+  if (S.blessing) {
+    const f = BLESS_FACES[S.blessing.value - 1];
+    files.push(f === "star" ? "wuerfel-segnung-stern.svg" : f === "success" ? "wuerfel-segnung-erfolg.svg" : f === "success2" ? "wuerfel-segnung-erfolg2.svg" : "wuerfel-segnung-blank.svg");
+  }
+  return files;
+}
+
+function makeDieImage(url, x, y, rot) {
+  const id = (typeof crypto !== "undefined" && crypto.randomUUID)
+    ? crypto.randomUUID()
+    : "wuerfel-" + Date.now() + "-" + Math.floor(Math.random() * 1e9);
+  return {
+    id: id,
+    type: "IMAGE",
+    visible: true,
+    locked: false,
+    name: "HeXXen-Würfel",
+    x: x,
+    y: y,
+    rotation: rot,
+    scale: { x: 1, y: 1 },
+    image: { url: url, mime: "image/svg+xml", width: 256, height: 256 },
+    grid: { dpi: 256, offset: [{ x: 128, y: 128 }] },
+    text: {
+      type: "PLAIN",
+      plainText: "",
+      richText: [],
+      style: {
+        fillColor: "#000000", fillOpacity: 1,
+        strokeColor: "#000000", strokeOpacity: 0, strokeWidth: 0,
+        textAlign: "LEFT", textAlignVertical: "TOP",
+        fontFamily: "openSans", fontSize: 24, fontWeight: 400, lineHeight: 1.25,
+      },
+      width: "auto",
+      height: "auto",
+    },
+    textItemType: "LABEL",
+  };
+}
+
+async function placeOnScene() {
+  const ev = evaluate();
+  if (!ev || typeof OBR === "undefined") return;
+  const files = diceListForScene();
+  const base = location.href.replace(/[^/]*$/, "");
+  let cell = 100;
+  try { const g = await OBR.scene.getGrid(); if (g && typeof g.size === "number" && g.size > 0) cell = g.size; } catch (e) {}
+  let cx = 0, cy = 0;
+  try {
+    const vp = await OBR.viewport.getViewport();
+    const sc = (vp && vp.scale) ? vp.scale : 1;
+    if (vp && vp.topLeft) { cx = vp.topLeft.x + (vp.width / sc) / 2; cy = vp.topLeft.y + (vp.height / sc) / 2; }
+  } catch (e) {}
+  const perRow = Math.min(6, files.length);
+  const rows = Math.ceil(files.length / perRow);
+  const gap = cell * 1.1;
+  const items = [];
+  files.forEach(function (fn, i) {
+    const col = i % perRow;
+    const row = Math.floor(i / perRow);
+    const px = cx - ((perRow - 1) / 2) * gap + col * gap;
+    const py = cy - ((rows - 1) / 2) * gap + row * gap;
+    items.push(makeDieImage(base + fn, px, py, Math.random() * 16 - 8));
+  });
+  const text = rawTextItem(shareText(ev));
+  text.x = cx;
+  text.y = cy + ((rows - 1) / 2) * gap + gap;
+  items.push(text);
+  try {
+    await OBR.scene.items.addItems(items);
+    sceneIds = items.map(function (it) { return it.id; });
+    OBR.notification.show("Wurf auf die Szene gelegt.");
+  } catch (err) {
+    try {
+      await OBR.scene.items.addItems([text]);
+      sceneIds = [text.id];
+      OBR.notification.show("Würfelbilder nicht erreichbar, Ergebnis als Text gelegt.");
+    } catch (e2) {
+      copyResult(shareText(ev));
+    }
+  }
+  render();
+}
+
+async function cleanupScene() {
+  if (typeof OBR === "undefined" || sceneIds.length === 0) return;
+  try {
+    await OBR.scene.items.deleteItems(sceneIds);
+    sceneIds = [];
+    OBR.notification.show("Würfel von der Szene entfernt.");
+  } catch (e) {
+    OBR.notification.show("Entfernen nicht möglich.");
+  }
+  render();
 }
 
 // ---------- Ereignisse ----------
@@ -501,7 +592,8 @@ document.getElementById("app").addEventListener("click", function (e) {
   else if (a === "bless") { rollBlessing(); }
   else if (a === "blesscount") { if (S.blessing) { S.blessing.counted = !S.blessing.counted; render(); } }
   else if (a === "new") { newProbe(); }
-  else if (a === "share") { shareToScene(); }
+  else if (a === "scene") { placeOnScene(); }
+  else if (a === "cleanup") { cleanupScene(); }
 });
 
 // ---------- Start ----------
