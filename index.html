@@ -95,7 +95,6 @@
   Eigenständig: Datei einfach im Browser öffnen; der Szene-Teilen-Button erscheint nur in Owlbear Rodeo.
 -->
 <div class="wrap" id="app"></div>
-<script src="https://extension.owlbear.rodeo/sdk-v2.js"></script>
 <script>
 // ---------- Original-Symbole (SVG-Pfaddaten aus den Assets des Nutzers) ----------
 const P_BLOOD1 = "m 358.25937,695.49222 c -4.32326,-5.05075 -9.67924,-20.81342 -12.20525,-35.92007 -1.50153,-8.97975 -1.66163,-14.49145 -1.13213,-38.97436 0.57539,-26.60453 1.3493,-43.01927 5.16337,-109.51553 3.951,-68.8837 4.99548,-132.86943 2.5873,-158.5 -2.25573,-24.00807 -6.4003,-38.57731 -12.41366,-43.63722 -2.65279,-2.23217 -3.72817,-2.51421 -7.76392,-2.03623 -25.17289,2.98135 -91.61956,38.99937 -237.561414,128.7723 -41.2306,25.3621 -68.96253,41.71634 -79.48991,46.87726 -7.6541201,3.75234 -8.0837501,3.85965 -5.22891,1.30607 14.14273,-12.65028 61.81703,-54.25282 78.38959,-68.40595 C 240.06885,286.10634 361.78012,198.06242 494.42919,121.89156 538.31623,96.690385 558.8452,85.490285 669.60444,26.320285 c 12.375,-6.610993 24.6375,-13.302386 27.25,-14.86976 6.72917,-4.0371785 5.83819,-2.1990795 -1.51805,3.131743 -3.41536,2.475 -21.33559,16.023857 -39.82273,30.108567 C 518.75646,148.88144 439.63138,217.81415 395.07414,271.58226 c -13.89521,16.76762 -17.48418,25.31661 -20.89245,49.76618 -5.61607,40.28747 -4.47171,96.21529 4.39375,214.73382 5.10906,68.30087 5.44721,74.51337 5.443,100 -0.004,23.96753 -0.11451,25.40682 -2.677,34.8507 -4.92138,18.13735 -11.24551,28.6493 -17.2358,28.6493 -1.50754,0 -3.59596,-1.46105 -5.84627,-4.09004 z";
@@ -137,7 +136,9 @@ let S = {
   blutOn: false, elixierOn: false,
   roll: null, blessing: null, rolling: false, blessingRolling: false,
 };
-let obrState = (typeof OBR === "undefined") ? "nosdk" : "connecting"; // nosdk | connecting | ready | timeout
+let OBR = null; // SDK-Objekt, wird per dynamischem Import vom CDN geladen
+let OBRExtra = null; // SDK-Modul (enthält optional buildText/buildImage)
+let obrState = "connecting"; // nosdk | connecting | ready | timeout
 let sceneIds = [];
 
 function randomRoll() {
@@ -446,7 +447,7 @@ function rawTextItem(text) {
 
 function copyResult(text) {
   const done = () => {
-    if (typeof OBR !== "undefined" && OBR.notification) OBR.notification.show("Ergebnis kopiert – bitte manuell einfügen.");
+    if (OBR && OBR.notification) OBR.notification.show("Ergebnis kopiert – bitte manuell einfügen.");
   };
   try {
     if (navigator.clipboard && navigator.clipboard.writeText) {
@@ -519,9 +520,49 @@ function makeDieImage(url, x, y, rot) {
   };
 }
 
+function getBuilder(name) {
+  if (OBRExtra && typeof OBRExtra[name] === "function") return OBRExtra[name];
+  if (OBR && typeof OBR[name] === "function") return OBR[name];
+  return null;
+}
+
+function dieItem(url, x, y, rot) {
+  const buildImage = getBuilder("buildImage");
+  if (buildImage) {
+    try {
+      return buildImage(
+        { height: 256, width: 256, url: url, mime: "image/svg+xml" },
+        { dpi: 256, offset: { x: 128, y: 128 } }
+      ).x(x).y(y).rotation(rot).name("HeXXen-Würfel").locked(false).build();
+    } catch (e) { /* Fallback: rohes Objekt unten */ }
+  }
+  return makeDieImage(url, x, y, rot);
+}
+
+function resultTextItem(x, y, text) {
+  const buildText = getBuilder("buildText");
+  if (buildText) {
+    try {
+      let b = buildText();
+      if (typeof b.plainText === "function") b = b.plainText(text);
+      if (typeof b.textType === "function") b = b.textType("PLAIN");
+      if (typeof b.fontSize === "function") b = b.fontSize(40);
+      if (typeof b.fillColor === "function") b = b.fillColor("#f5f0e6");
+      if (typeof b.textAlign === "function") b = b.textAlign("CENTER");
+      if (typeof b.width === "function") b = b.width("auto");
+      if (typeof b.height === "function") b = b.height("auto");
+      return b.x(x).y(y).name("HeXXen-Wurf").build();
+    } catch (e) { /* Fallback: rohes Objekt unten */ }
+  }
+  const t = rawTextItem(text);
+  t.x = x;
+  t.y = y;
+  return t;
+}
+
 async function placeOnScene() {
   const ev = evaluate();
-  if (!ev || typeof OBR === "undefined") return;
+  if (!ev || !OBR) return;
   const files = diceListForScene();
   const base = location.href.replace(/[^/]*$/, "");
   let cell = 100;
@@ -541,12 +582,9 @@ async function placeOnScene() {
     const row = Math.floor(i / perRow);
     const px = cx - ((perRow - 1) / 2) * gap + col * gap;
     const py = cy - ((rows - 1) / 2) * gap + row * gap;
-    items.push(makeDieImage(base + fn, px, py, Math.random() * 16 - 8));
+    items.push(dieItem(base + fn, px, py, Math.random() * 16 - 8));
   });
-  const text = rawTextItem(shareText(ev));
-  text.x = cx;
-  text.y = cy + ((rows - 1) / 2) * gap + gap;
-  items.push(text);
+  items.push(resultTextItem(cx, cy + ((rows - 1) / 2) * gap + gap, shareText(ev)));
   try {
     await OBR.scene.items.addItems(items);
     sceneIds = items.map(function (it) { return it.id; });
@@ -564,7 +602,7 @@ async function placeOnScene() {
 }
 
 async function cleanupScene() {
-  if (typeof OBR === "undefined" || sceneIds.length === 0) return;
+  if (!OBR || sceneIds.length === 0) return;
   try {
     await OBR.scene.items.deleteItems(sceneIds);
     sceneIds = [];
@@ -600,24 +638,30 @@ document.getElementById("app").addEventListener("click", function (e) {
 
 // ---------- Start ----------
 render();
-(function initOBR() {
-  if (typeof OBR === "undefined") {
-    obrState = "nosdk";
-  } else {
+async function initOBR() {
+  const cdns = [
+    "https://esm.sh/@owlbear-rodeo/sdk@3.1.0",
+    "https://cdn.jsdelivr.net/npm/@owlbear-rodeo/sdk@3.1.0/+esm"
+  ];
+  for (let i = 0; i < cdns.length; i++) {
     try {
-      OBR.onReady(function () {
-        obrState = "ready";
-        render();
-      });
-    } catch (e) {
-      obrState = "timeout";
-    }
-    setTimeout(function () {
-      if (obrState === "connecting") { obrState = "timeout"; render(); }
-    }, 3000);
+      const mod = await import(cdns[i]);
+      const obr = mod.default || mod;
+      if (obr && typeof obr.onReady === "function") { OBR = obr; OBRExtra = mod; break; }
+    } catch (e) { /* nächsten CDN versuchen */ }
   }
+  if (!OBR) { obrState = "nosdk"; render(); return; }
+  try {
+    OBR.onReady(function () { obrState = "ready"; render(); });
+  } catch (e) {
+    obrState = "timeout";
+  }
+  setTimeout(function () {
+    if (obrState === "connecting") { obrState = "timeout"; render(); }
+  }, 3000);
   render();
-})();
+}
+initOBR();
 </script>
 </body>
 </html>
