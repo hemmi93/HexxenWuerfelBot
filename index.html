@@ -86,6 +86,14 @@
   .toggle.on i { left: calc(100% - 1.3rem - 3px); }
   .foot { text-align: center; font-size: 0.7rem; color: #57534e; margin-top: 1.1rem; }
 </style>
+<script type="module">
+/* Owlbear-Rodeo-SDK statisch laden. Modul-Scripts werden garantiert vor dem
+   load-Event der Seite ausgeführt: der Nachrichten-Listener des SDK ist damit
+   registriert, BEVOR Owlbear Rodeo den OBR_READY-Handshake an das Popup sendet.
+   (Dynamischer Import nach dem Laden war zu spät und verpasste den Handshake.) */
+import * as __obrMod from "https://esm.sh/@owlbear-rodeo/sdk@3.1.0";
+window.__obrMod = __obrMod;
+</script>
 </head>
 <body>
 <!--
@@ -136,9 +144,9 @@ let S = {
   blutOn: false, elixierOn: false,
   roll: null, blessing: null, rolling: false, blessingRolling: false,
 };
-let OBR = null; // SDK-Objekt, wird per dynamischem Import vom CDN geladen
+let OBR = null; // SDK-Objekt (Modul-Script im Head lädt es vor dem load-Event)
 let OBRExtra = null; // SDK-Modul (enthält optional buildText/buildImage)
-let obrState = "connecting"; // nosdk | connecting | ready | timeout
+let obrState = "connecting"; // standalone | nosdk | connecting | ready | timeout
 let sceneIds = [];
 
 function randomRoll() {
@@ -269,7 +277,10 @@ function headerHtml() {
   let h = "<h1>HeXXen 1733 · Würfelbot</h1>";
   h += '<div class="sub">Fertigkeitsproben mit HeXXen-, Janus- und Spezialwürfeln. Für PC und Smartphone.</div>';
   if (obrState === "ready") h += '<div class="obrbadge"><i></i>Mit Owlbear Rodeo verbunden</div>';
-  else if (obrState === "timeout") h += '<div class="obrbadge" style="color:#fde68a;background:rgba(120,53,15,.45);border-color:#b45309"><i style="background:#f59e0b"></i>Keine Szene-Verbindung erkannt</div>';
+  else if (obrState === "timeout") {
+    h += '<div class="obrbadge" style="color:#fde68a;background:rgba(120,53,15,.45);border-color:#b45309"><i style="background:#f59e0b"></i>Keine Szene-Verbindung erkannt</div>';
+    h += '<div class="hint" style="margin-top:.45rem">Würfel-Buttons erscheinen nach erfolgreicher Verbindung. Popup schließen und neu öffnen oder <a href="#" data-act="reload" style="color:var(--amber);text-decoration:underline">neu laden</a>.</div>';
+  }
   else if (obrState === "nosdk") h += '<div class="obrbadge" style="color:#fde68a;background:rgba(120,53,15,.45);border-color:#b45309"><i style="background:#f59e0b"></i>SDK nicht geladen (Adblocker?)</div>';
   h += '<div class="legend">' + legend.map((l) => '<span><span class="swatch" style="background:' + l.c + '"></span>' + l.n + "</span>").join("") + "</div>";
   return h;
@@ -378,7 +389,7 @@ function resultHtml(ev) {
   if (ev.stars > 0) h += '<p class="hint" style="margin-top:.4rem">Espritsterne können stattdessen für Espritkräfte eingesetzt werden, dann entfällt ihr Erfolgsbonus.</p>';
   h += "</section>";
 
-  if (obrState === "ready" || obrState === "timeout") {
+  if (obrState === "ready") {
     h += '<div class="grid2" style="margin-top:1.1rem">'
       + '<button class="btn-sec" data-act="scene">Auf die Szene würfeln</button>'
       + '<button class="btn-sec" data-act="cleanup" ' + (sceneIds.length > 0 ? "" : "disabled") + '>Würfel entfernen</button></div>';
@@ -563,6 +574,7 @@ function resultTextItem(x, y, text) {
 async function placeOnScene() {
   const ev = evaluate();
   if (!ev || !OBR) return;
+  if (obrState !== "ready") { try { OBR.notification.show("Noch keine Szene-Verbindung."); } catch (e) {} return; }
   const files = diceListForScene();
   const base = location.href.replace(/[^/]*$/, "");
   let cell = 100;
@@ -591,8 +603,11 @@ async function placeOnScene() {
     OBR.notification.show("Wurf auf die Szene gelegt.");
   } catch (err) {
     try {
-      await OBR.scene.items.addItems([text]);
-      sceneIds = [text.id];
+      const t = rawTextItem(shareText(ev));
+      t.x = cx;
+      t.y = cy + ((rows - 1) / 2) * gap + gap;
+      await OBR.scene.items.addItems([t]);
+      sceneIds = [t.id];
       OBR.notification.show("Würfelbilder nicht erreichbar, Ergebnis als Text gelegt.");
     } catch (e2) {
       copyResult(shareText(ev));
@@ -634,31 +649,56 @@ document.getElementById("app").addEventListener("click", function (e) {
   else if (a === "new") { newProbe(); }
   else if (a === "scene") { placeOnScene(); }
   else if (a === "cleanup") { cleanupScene(); }
+  else if (a === "reload") { location.reload(); }
 });
 
 // ---------- Start ----------
 render();
+function setSdk(mod) {
+  const obr = mod ? (mod.default || mod) : null;
+  if (obr && typeof obr.onReady === "function") { OBR = obr; OBRExtra = mod; return true; }
+  return false;
+}
 async function initOBR() {
-  const cdns = [
-    "https://esm.sh/@owlbear-rodeo/sdk@3.1.0",
-    "https://cdn.jsdelivr.net/npm/@owlbear-rodeo/sdk@3.1.0/+esm"
-  ];
-  for (let i = 0; i < cdns.length; i++) {
-    try {
-      const mod = await import(cdns[i]);
-      const obr = mod.default || mod;
-      if (obr && typeof obr.onReady === "function") { OBR = obr; OBRExtra = mod; break; }
-    } catch (e) { /* nächsten CDN versuchen */ }
+  // Ohne obrref-Parameter läuft die Seite nicht in Owlbear Rodeo (Eigenständiger Modus).
+  if (!new URLSearchParams(window.location.search).has("obrref")) {
+    obrState = "standalone"; render(); return;
+  }
+  // Statisch geladenes SDK aus dem Modul-Script im Head abwarten.
+  const statisch = await new Promise(function (resolve) {
+    const t0 = Date.now();
+    const iv = setInterval(function () {
+      if (window.__obrMod) { clearInterval(iv); resolve(window.__obrMod); }
+      else if (Date.now() - t0 > 12000) { clearInterval(iv); resolve(null); }
+    }, 100);
+  });
+  if (!statisch || !setSdk(statisch)) {
+    // Fallback: dynamischer Import (spät, Handshake könnte verpasst werden).
+    const cdns = [
+      "https://esm.sh/@owlbear-rodeo/sdk@3.1.0",
+      "https://cdn.jsdelivr.net/npm/@owlbear-rodeo/sdk@3.1.0/+esm"
+    ];
+    for (let i = 0; i < cdns.length; i++) {
+      try { const mod = await import(cdns[i]); if (setSdk(mod)) break; } catch (e) { /* nächsten CDN versuchen */ }
+    }
   }
   if (!OBR) { obrState = "nosdk"; render(); return; }
   try {
-    OBR.onReady(function () { obrState = "ready"; render(); });
-  } catch (e) {
-    obrState = "timeout";
-  }
-  setTimeout(function () {
-    if (obrState === "connecting") { obrState = "timeout"; render(); }
-  }, 3000);
+    OBR.onReady(function () { if (obrState !== "ready") { obrState = "ready"; render(); } });
+  } catch (e) {}
+  // Bereitschaft bis zu 15 Sekunden abfragen statt nach 3 Sekunden aufzugeben.
+  let gewartet = 0;
+  const poll = setInterval(function () {
+    if (obrState === "ready") { clearInterval(poll); return; }
+    if (typeof OBR.isReady === "boolean" && OBR.isReady) {
+      clearInterval(poll); obrState = "ready"; render(); return;
+    }
+    gewartet += 250;
+    if (gewartet >= 15000) {
+      clearInterval(poll);
+      if (obrState !== "ready") { obrState = "timeout"; render(); }
+    }
+  }, 250);
   render();
 }
 initOBR();
